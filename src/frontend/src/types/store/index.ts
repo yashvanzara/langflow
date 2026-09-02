@@ -45,10 +45,10 @@ export type shortcutsStoreType = {
   delete: string;
   update: string;
   download: string;
-  freeze: string;
   toggleSidebar: string;
   freezePath: string;
   toolMode: string;
+  aiAssistant: string;
   shortcuts: Array<{
     name: string;
     display_name: string;

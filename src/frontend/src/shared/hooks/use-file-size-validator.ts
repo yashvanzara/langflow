@@ -1,17 +1,18 @@
-import { INVALID_FILE_SIZE_ALERT } from "@/constants/alerts_constants";
+import { useTranslation } from "react-i18next";
 import { useUtilityStore } from "@/stores/utilityStore";
+import { formatFileSize } from "@/utils/stringManipulation";
 
-const useFileSizeValidator = (
-  setErrorData: (newState: { title: string; list?: Array<string> }) => void,
-) => {
+const useFileSizeValidator = () => {
+  const { t } = useTranslation();
   const maxFileSizeUpload = useUtilityStore((state) => state.maxFileSizeUpload);
 
   const validateFileSize = (file) => {
     if (file.size > maxFileSizeUpload) {
-      setErrorData({
-        title: INVALID_FILE_SIZE_ALERT(maxFileSizeUpload / 1024 / 1024),
-      });
-      return false;
+      throw new Error(
+        t("errors.fileTooLarge", {
+          maxSizeMB: formatFileSize(maxFileSizeUpload),
+        }),
+      );
     }
     return true;
   };

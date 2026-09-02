@@ -1,8 +1,9 @@
 from typing import Annotated
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from loguru import logger
+from lfx.log.logger import logger
 
 from langflow.api.utils import CurrentActiveUser, check_langflow_version
 from langflow.services.auth import utils as auth_utils
@@ -17,14 +18,14 @@ from langflow.services.store.schema import (
     UsersLikesResponse,
 )
 
-router = APIRouter(prefix="/store", tags=["Components Store"])
+router = APIRouter(prefix="/store", tags=["Components Store"], include_in_schema=False)
 
 
 def get_user_store_api_key(user: CurrentActiveUser):
     if not user.store_api_key:
         raise HTTPException(status_code=400, detail="You must have a store API key set.")
     try:
-        return auth_utils.decrypt_api_key(user.store_api_key, get_settings_service())
+        return auth_utils.decrypt_api_key(user.store_api_key)
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to decrypt API key. Please set a new one.") from e
 
@@ -33,7 +34,7 @@ def get_optional_user_store_api_key(user: CurrentActiveUser):
     if not user.store_api_key:
         return None
     try:
-        return auth_utils.decrypt_api_key(user.store_api_key, get_settings_service())
+        return auth_utils.decrypt_api_key(user.store_api_key)
     except Exception:  # noqa: BLE001
         logger.exception("Failed to decrypt API key")
         return user.store_api_key
@@ -147,6 +148,13 @@ async def get_tags():
         return await get_store_service().get_tags()
     except CustomError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.TransportError as exc:
+        # The store is a third-party service and the visual editor asks for tags on
+        # every app boot, so an unreachable upstream must not read as a fault of this
+        # server. Tags only decorate a filter, so degrade to none and keep 500 for
+        # failures that ARE ours.
+        await logger.awarning(f"Langflow Store unreachable; serving no tags: {exc}")
+        return []
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

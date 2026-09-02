@@ -1,67 +1,132 @@
+import type { ComponentProps } from "react";
+import { useTranslation } from "react-i18next";
+import type { handleOnNewValueType } from "@/CustomNodes/hooks/use-handle-new-value";
 import { ParameterRenderComponent } from "@/components/core/parameterRenderComponent";
-import { handleOnNewValueType } from "@/CustomNodes/hooks/use-handle-new-value";
-import { APIClassType, InputFieldType } from "@/types/api";
+import type { NodeInfoType } from "@/components/core/parameterRenderComponent/types";
+import { useIsFlowReadOnly } from "@/contexts/permissionsContext";
+import useFlowStore from "@/stores/flowStore";
+import type { APIClassType, InputFieldType } from "@/types/api";
+import type { targetHandleType } from "@/types/flow";
+import { scapedJSONStringfy } from "@/utils/reactflowUtils";
 import { cn } from "@/utils/utils";
 
 export function CustomParameterComponent({
   handleOnNewValue,
   name,
   nodeId,
+  inputId,
   templateData,
   templateValue,
+  showParameter,
+  inspectionPanel = false,
   editNode,
   handleNodeClass,
   nodeClass,
-  disabled,
   placeholder,
-  isToolMode,
+  isToolMode = false,
+  nodeInformationMetadata,
+  proxy,
+  ariaLabelledBy,
 }: {
   handleOnNewValue: handleOnNewValueType;
   name: string;
   nodeId: string;
+  inputId: targetHandleType;
   templateData: Partial<InputFieldType>;
-  templateValue: any;
+  templateValue: unknown;
+  showParameter: boolean;
+  inspectionPanel: boolean;
   editNode: boolean;
-  handleNodeClass: (value: any, code?: string, type?: string) => void;
+  handleNodeClass: ComponentProps<
+    typeof ParameterRenderComponent
+  >["handleNodeClass"];
   nodeClass: APIClassType;
-  disabled: boolean;
   placeholder?: string;
   isToolMode?: boolean;
+  nodeInformationMetadata?: NodeInfoType;
+  proxy: { field: string; id: string } | undefined;
+  ariaLabelledBy?: string;
 }) {
+  const { t } = useTranslation();
+  const edges = useFlowStore((state) => state.edges);
+  const currentFlowId = useFlowStore((state) => state.currentFlow?.id);
+  const isReadOnly = useIsFlowReadOnly(currentFlowId);
+
+  const disabled =
+    edges.some(
+      (edge) =>
+        edge.targetHandle ===
+        scapedJSONStringfy(proxy ? { ...inputId, proxy } : inputId),
+    ) || isToolMode;
+
   return (
-    <ParameterRenderComponent
-      handleOnNewValue={handleOnNewValue}
-      name={name}
-      nodeId={nodeId}
-      templateData={templateData}
-      templateValue={templateValue}
-      editNode={editNode}
-      handleNodeClass={handleNodeClass}
-      nodeClass={nodeClass}
-      disabled={disabled}
-      placeholder={placeholder}
-      isToolMode={isToolMode}
-    />
+    <div
+      data-testid="parameter-permission-gate"
+      className={cn(
+        "w-full min-w-0",
+        isReadOnly && "pointer-events-none opacity-60",
+      )}
+      inert={isReadOnly}
+      aria-disabled={isReadOnly}
+      title={isReadOnly ? t("version.readOnly") : undefined}
+    >
+      <ParameterRenderComponent
+        handleOnNewValue={handleOnNewValue}
+        name={name}
+        nodeId={nodeId}
+        templateData={templateData}
+        templateValue={templateValue}
+        editNode={editNode}
+        showParameter={showParameter}
+        inspectionPanel={inspectionPanel}
+        handleNodeClass={handleNodeClass}
+        nodeClass={nodeClass}
+        disabled={disabled}
+        placeholder={placeholder}
+        isToolMode={isToolMode}
+        nodeInformationMetadata={nodeInformationMetadata}
+        ariaLabelledBy={ariaLabelledBy}
+      />
+    </div>
   );
 }
 
 export function getCustomParameterTitle({
   title,
-  nodeId,
   isFlexView,
+  required,
+  inspectionPanel,
+  labelId,
+  requiredText,
 }: {
   title: string;
   nodeId: string;
   isFlexView: boolean;
+  required?: boolean;
+  inspectionPanel?: boolean;
+  labelId?: string;
+  requiredText?: string;
 }) {
   return (
-    <div className={cn(isFlexView && "max-w-56 truncate")}>
+    <div id={labelId} className={cn(isFlexView && "max-w-56 truncate")}>
       <span
         data-testid={`title-${title.toLocaleLowerCase()}`}
-        className="text-[13px]"
+        className={cn(
+          inspectionPanel
+            ? "text-xs font-medium"
+            : "text-sm text-secondary-foreground",
+        )}
       >
         {title}
       </span>
+      {required && (
+        <>
+          <span className="text-destructive" aria-hidden="true">
+            *
+          </span>
+          <span className="sr-only">{requiredText}</span>
+        </>
+      )}
     </div>
   );
 }
@@ -74,7 +139,7 @@ export function CustomParameterLabel({
 }: {
   name: string;
   nodeId: string;
-  templateValue: any;
+  templateValue: unknown;
   nodeClass: APIClassType;
 }) {
   return <></>;

@@ -1,8 +1,8 @@
-import { FolderType } from "../../../pages/MainPage/entities";
+import type { FolderType } from "../../../pages/MainPage/entities";
 
 export type FoldersStoreType = {
-  myCollectionId: string | null;
-  setMyCollectionId: (value: string) => void;
+  myCollectionId: string | null | undefined;
+  setMyCollectionId: (value: string | undefined) => void;
   folderToEdit: FolderType | null;
   setFolderToEdit: (folder: FolderType | null) => void;
   folderDragging: boolean;
@@ -13,4 +13,5 @@ export type FoldersStoreType = {
   setStarterProjectId: (id: string) => void;
   folders: FolderType[];
   setFolders: (folders: FolderType[]) => void;
+  resetStore: () => void;
 };

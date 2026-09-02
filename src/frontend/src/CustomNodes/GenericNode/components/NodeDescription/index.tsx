@@ -1,16 +1,16 @@
-import { Textarea } from "@/components/ui/textarea";
-import useFlowsManagerStore from "@/stores/flowsManagerStore";
-import useFlowStore from "@/stores/flowStore";
-import { handleKeyDown } from "@/utils/reactflowUtils";
-import { cn } from "@/utils/utils";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
+import { Textarea } from "@/components/ui/textarea";
+import useFlowStore from "@/stores/flowStore";
+import useFlowsManagerStore from "@/stores/flowsManagerStore";
+import { handleKeyDown } from "@/utils/reactflowUtils";
+import { cn } from "@/utils/utils";
 
 export default function NodeDescription({
   description,
   selected,
   nodeId,
-  emptyPlaceholder = "Double Click to Edit Description",
+  emptyPlaceholder = "",
   placeholderClassName,
   charLimit,
   inputClassName,
@@ -20,6 +20,7 @@ export default function NodeDescription({
   setEditNameDescription,
   stickyNote,
   setHasChangedNodeDescription,
+  readOnly = false,
 }: {
   description?: string;
   selected?: boolean;
@@ -34,6 +35,7 @@ export default function NodeDescription({
   setEditNameDescription?: (value: boolean) => void;
   stickyNote?: boolean;
   setHasChangedNodeDescription?: (value: boolean) => void;
+  readOnly?: boolean;
 }) {
   const [nodeDescription, setNodeDescription] = useState<string>(
     description ?? "",
@@ -44,10 +46,17 @@ export default function NodeDescription({
   const [hasScroll, sethasScroll] = useState(false);
 
   useEffect(() => {
-    if (selected && editNameDescription) {
+    if (selected && editNameDescription && !readOnly) {
       takeSnapshot();
     }
-  }, [editNameDescription]);
+  }, [editNameDescription, readOnly, selected, takeSnapshot]);
+
+  useEffect(() => {
+    if (readOnly && editNameDescription) {
+      setEditNameDescription?.(false);
+      setNodeDescription(description ?? "");
+    }
+  }, [description, editNameDescription, readOnly, setEditNameDescription]);
 
   useEffect(() => {
     //timeout to wait for the dom to update
@@ -69,25 +78,39 @@ export default function NodeDescription({
   }, [description]);
 
   const MemoizedMarkdown = memo(Markdown);
-  const renderedDescription = useMemo(
-    () =>
-      description === "" || !description ? (
-        emptyPlaceholder
-      ) : (
-        <MemoizedMarkdown
-          linkTarget="_blank"
-          className={cn(
-            "markdown prose flex w-full flex-col text-[13px] leading-5 word-break-break-word [&_pre]:whitespace-break-spaces [&_pre]:!bg-code-description-background [&_pre_code]:!bg-code-description-background",
-            mdClassName,
-          )}
-        >
-          {String(description)}
-        </MemoizedMarkdown>
-      ),
-    [description, emptyPlaceholder, mdClassName],
-  );
+
+  const renderedDescription = useMemo(() => {
+    if (description === "" || !description) {
+      return emptyPlaceholder;
+    }
+    return (
+      <MemoizedMarkdown
+        className={cn(
+          "markdown prose flex w-full flex-col leading-5 word-break-break-word [&_pre]:whitespace-break-spaces [&_pre]:!bg-code-description-background [&_pre_code]:!bg-code-description-background",
+          stickyNote
+            ? "!text-base !font-medium leading-relaxed [&_p]:!text-base [&_p]:!font-medium [&_li]:!text-base [&_li]:!font-medium"
+            : "text-xs",
+          mdClassName,
+        )}
+        components={{
+          a: ({ node, ...props }) => (
+            <a {...props} target="_blank" rel="noopener noreferrer">
+              {props.children}
+            </a>
+          ),
+        }}
+      >
+        {String(description)}
+      </MemoizedMarkdown>
+    );
+  }, [description, emptyPlaceholder, mdClassName]);
 
   const handleBlurFn = () => {
+    if (readOnly) {
+      setNodeDescription(description ?? "");
+      setEditNameDescription?.(false);
+      return;
+    }
     setNodeDescription(nodeDescription);
     setNode(nodeId, (old) => ({
       ...old,
@@ -105,6 +128,7 @@ export default function NodeDescription({
   };
 
   const handleKeyDownFn = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (readOnly) return;
     handleKeyDown(e, nodeDescription, "");
 
     if (e.key === "Escape") {
@@ -128,13 +152,14 @@ export default function NodeDescription({
   };
 
   const handleDoubleClickFn = () => {
-    if (stickyNote) {
+    if (stickyNote && !readOnly) {
       setEditNameDescription?.(true);
       takeSnapshot();
     }
   };
 
   const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    if (readOnly) return;
     setHasChangedNodeDescription?.(true);
     setNodeDescription(e.target.value);
   };
@@ -142,18 +167,21 @@ export default function NodeDescription({
   return (
     <div
       className={cn(
-        !editNameDescription ? "overflow-auto" : "",
+        !editNameDescription || readOnly ? "overflow-auto" : "overflow-hidden",
         hasScroll ? "nowheel" : "",
-        charLimit ? "px-2 pb-4" : "",
+        charLimit ? "flex flex-col" : "",
         "w-full",
       )}
     >
-      {editNameDescription ? (
+      {editNameDescription && !readOnly ? (
         <>
           <Textarea
             maxLength={charLimit}
             className={cn(
-              "nowheel h-full w-full focus:border-primary focus:ring-0",
+              "nowheel w-full text-xs focus:border-primary focus:ring-0",
+              stickyNote
+                ? "overflow-auto p-0 px-2 pt-0.5 !text-base font-medium"
+                : "px-2 py-0.5",
               inputClassName,
             )}
             autoFocus
@@ -166,7 +194,7 @@ export default function NodeDescription({
           {charLimit && (nodeDescription?.length ?? 0) >= charLimit - 100 && (
             <div
               className={cn(
-                "pt-1 text-left text-[13px]",
+                "pt-1 text-left !text-mmd",
                 (nodeDescription?.length ?? 0) >= charLimit
                   ? "text-error"
                   : "text-primary",
@@ -183,8 +211,9 @@ export default function NodeDescription({
           data-testid="generic-node-desc"
           ref={overflowRef}
           className={cn(
-            "nodoubleclick generic-node-desc-text h-full cursor-grab text-[13px] text-muted-foreground word-break-break-word",
+            "nodoubleclick generic-node-desc-text h-full cursor-grab text-muted-foreground word-break-break-word",
             description === "" || !description ? "font-light italic" : "",
+            stickyNote && "text-base font-medium overflow-auto max-h-full",
             placeholderClassName,
           )}
           onDoubleClick={handleDoubleClickFn}

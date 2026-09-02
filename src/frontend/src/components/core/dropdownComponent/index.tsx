@@ -1,37 +1,31 @@
-import LoadingTextComponent from "@/components/common/loadingTextComponent";
-import { usePostTemplateValue } from "@/controllers/API/queries/nodes/use-post-template-value";
-import NodeDialog from "@/CustomNodes/GenericNode/components/NodeDialogComponent";
-import { mutateTemplate } from "@/CustomNodes/helpers/mutate-template";
-import useAlertStore from "@/stores/alertStore";
-import { getStatusColor } from "@/utils/stringManipulation";
 import { PopoverAnchor } from "@radix-ui/react-popover";
-import Fuse from "fuse.js";
-import { cloneDeep } from "lodash";
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
-import { DropDownComponent } from "../../../types/components";
-import {
-  cn,
-  filterNullOptions,
-  formatName,
-  formatPlaceholderName,
-} from "../../../utils/utils";
+import { useMemo, useRef } from "react";
+import { useTranslation } from "react-i18next";
+import LoadingTextComponent from "@/components/common/loadingTextComponent";
+import { BUILD_PANEL_COLLISION_PADDING_PX } from "@/constants/constants";
+import { useGetModelProviders } from "@/controllers/API/queries/models/use-get-model-providers";
+import useFlowStore from "@/stores/flowStore";
+import useFlowsManagerStore from "@/stores/flowsManagerStore";
+import type { DropDownComponent } from "../../../types/components";
+import { cn, filterNullOptions, formatName } from "../../../utils/utils";
 import { default as ForwardedIconComponent } from "../../common/genericIconComponent";
-import ShadTooltip from "../../common/shadTooltipComponent";
 import { Button } from "../../ui/button";
-import {
-  Command,
-  CommandGroup,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
-} from "../../ui/command";
+import { Command, CommandItem } from "../../ui/command";
 import {
   Popover,
   PopoverContent,
   PopoverContentWithoutPortal,
-  PopoverTrigger,
 } from "../../ui/popover";
-import { BaseInputProps } from "../parameterRenderComponent/types";
+import type { BaseInputProps } from "../parameterRenderComponent/types";
+import { DropdownOptionsList } from "./components/DropdownOptionsList";
+import { DropdownSearchInput } from "./components/DropdownSearchInput";
+import { DropdownTrigger } from "./components/DropdownTrigger";
+import { useDropdownMutations } from "./hooks/useDropdownMutations";
+import { useDropdownOptions } from "./hooks/useDropdownOptions";
+
+const LEGACY_PROVIDER_OPTION_ALIASES: Record<string, string> = {
+  "IBM watsonx.ai": "IBM WatsonX",
+};
 
 export default function Dropdown({
   disabled,
@@ -41,114 +35,194 @@ export default function Dropdown({
   optionsMetaData,
   combobox,
   onSelect,
+  placeholder,
   editNode = false,
   id = "",
   children,
+  nodeId,
+  nodeClass,
+  handleNodeClass,
   name,
   dialogInputs,
+  externalOptions,
+  handleOnNewValue,
+  toggle,
+  inspectionPanel,
+  ariaLabelledBy,
   ...baseInputProps
 }: BaseInputProps & DropDownComponent): JSX.Element {
-  const validOptions = useMemo(() => filterNullOptions(options), [options]);
+  const { t } = useTranslation();
+  const currentFlowId = useFlowsManagerStore((state) => state.currentFlowId);
+  const isLegacyProviderSelector = name === "agent_llm";
+  const {
+    data: scopedModelProviders,
+    isLoading: isLoadingScopedModelProviders,
+    isFetching: isFetchingScopedModelProviders,
+    fetchStatus: scopedModelProvidersFetchStatus,
+    isError: scopedModelProvidersError,
+  } = useGetModelProviders(
+    { flowId: currentFlowId, purpose: "use" },
+    { enabled: isLegacyProviderSelector && Boolean(currentFlowId) },
+  );
+  const allowedProviderNames = useMemo(
+    () =>
+      isLegacyProviderSelector &&
+      Boolean(currentFlowId) &&
+      !isFetchingScopedModelProviders &&
+      scopedModelProvidersFetchStatus !== "paused" &&
+      !scopedModelProvidersError &&
+      scopedModelProviders !== undefined
+        ? new Set(scopedModelProviders.map(({ provider }) => provider))
+        : null,
+    [
+      currentFlowId,
+      isFetchingScopedModelProviders,
+      isLegacyProviderSelector,
+      scopedModelProviders,
+      scopedModelProvidersError,
+      scopedModelProvidersFetchStatus,
+    ],
+  );
 
-  // Initialize state and refs
-  const [open, setOpen] = useState(children ? true : false);
-  const [openDialog, setOpenDialog] = useState(false);
-  const [customValue, setCustomValue] = useState("");
-  const [filteredOptions, setFilteredOptions] = useState(validOptions);
-  const [refreshOptions, setRefreshOptions] = useState(false);
+  const { policyOptions, policyOptionsMetaData } = useMemo(() => {
+    if (!isLegacyProviderSelector) {
+      return { policyOptions: options, policyOptionsMetaData: optionsMetaData };
+    }
+
+    const keepIndexes = options.reduce<number[]>((indexes, option, index) => {
+      const policyProviderName =
+        LEGACY_PROVIDER_OPTION_ALIASES[option] ?? option;
+      if (
+        option === "Custom" ||
+        allowedProviderNames?.has(policyProviderName)
+      ) {
+        indexes.push(index);
+      }
+      return indexes;
+    }, []);
+    return {
+      policyOptions: keepIndexes.map((index) => options[index]),
+      policyOptionsMetaData: optionsMetaData
+        ? keepIndexes.map((index) => optionsMetaData[index])
+        : undefined,
+    };
+  }, [
+    allowedProviderNames,
+    isLegacyProviderSelector,
+    options,
+    optionsMetaData,
+  ]);
+  const visibleValue =
+    isLegacyProviderSelector && !policyOptions.includes(value) ? "" : value;
+  const validOptions = useMemo(
+    () => filterNullOptions(policyOptions),
+    [policyOptions, visibleValue],
+  );
+
+  // Options / filtering state and its sync effects
+  const {
+    open,
+    setOpen,
+    openDialog,
+    setOpenDialog,
+    setWaitingForResponse,
+    customValue,
+    filteredOptions,
+    setFilteredOptions,
+    filteredMetadata,
+    refreshOptions,
+    setRefreshOptions,
+    setPendingSelect,
+    searchRoleByTerm,
+  } = useDropdownOptions({
+    value: visibleValue,
+    options: policyOptions,
+    validOptions,
+    optionsMetaData: policyOptionsMetaData,
+    combobox,
+    disabled,
+    hasChildren: Boolean(children),
+    onSelect,
+  });
+  const { visibleFilteredOptions, visibleFilteredMetadata } = useMemo(() => {
+    if (!isLegacyProviderSelector) {
+      return {
+        visibleFilteredOptions: filteredOptions,
+        visibleFilteredMetadata: filteredMetadata,
+      };
+    }
+
+    const allowedOptions = new Set(policyOptions);
+    const keepIndexes = filteredOptions.reduce<number[]>(
+      (indexes, option, index) => {
+        if (allowedOptions.has(option)) {
+          indexes.push(index);
+        }
+        return indexes;
+      },
+      [],
+    );
+    return {
+      visibleFilteredOptions: keepIndexes.map(
+        (index) => filteredOptions[index],
+      ),
+      visibleFilteredMetadata: filteredMetadata
+        ? keepIndexes.map((index) => filteredMetadata[index])
+        : undefined,
+    };
+  }, [
+    filteredMetadata,
+    filteredOptions,
+    isLegacyProviderSelector,
+    policyOptions,
+  ]);
+  const _nodes = useFlowStore((state) => state.nodes);
+  const isBuilding = useFlowStore((state) => state.isBuilding);
+  const buildInfo = useFlowStore((state) => state.buildInfo);
+  const showingBuildPanel =
+    isBuilding || !!buildInfo?.error || !!buildInfo?.success;
+
   const refButton = useRef<HTMLButtonElement>(null);
 
   // Initialize utilities and constants
-  const placeholderName = name
-    ? formatPlaceholderName(name)
-    : "Choose an option...";
+
+  const sourceOptions = dialogInputs?.fields ? dialogInputs : externalOptions;
   const { firstWord } = formatName(name);
-  const fuse = new Fuse(validOptions, { keys: ["name", "value"] });
   const PopoverContentDropdown =
-    children || editNode ? PopoverContent : PopoverContentWithoutPortal;
-  const { nodeClass, nodeId, handleNodeClass, tooltip } = baseInputProps;
+    children || editNode || inspectionPanel
+      ? PopoverContent
+      : PopoverContentWithoutPortal;
+  const { helperText, hasRefreshButton } = baseInputProps;
 
-  // API and store hooks
-  const postTemplateValue = usePostTemplateValue({
-    parameterId: name || "",
-    nodeId: nodeId || "",
-    node: nodeClass!,
-  });
-  const setErrorData = useAlertStore((state) => state.setErrorData);
-
-  // Utility functions
-  const filterMetadataKeys = (
-    metadata: Record<string, any> = {},
-    excludeKeys: string[] = ["api_endpoint", "icon", "status"],
-  ) => {
-    return Object.fromEntries(
-      Object.entries(metadata).filter(([key]) => !excludeKeys.includes(key)),
-    );
-  };
-
-  const searchRoleByTerm = async (event: ChangeEvent<HTMLInputElement>) => {
-    const value = event.target.value;
-    const searchValues = fuse.search(value);
-    const filtered = searchValues.map((search) => search.item);
-    if (!filtered.includes(value) && combobox && value) filtered.push(value);
-    setFilteredOptions(value ? filtered : validOptions);
-    setCustomValue(value);
-  };
-
-  const handleRefreshButtonPress = async () => {
-    setRefreshOptions(true);
-    setOpen(false);
-
-    await mutateTemplate(
-      value,
-      nodeClass!,
+  // Template mutation flows (create-from-source, refresh list)
+  const { handleSourceOptions, handleRefreshButtonPress } =
+    useDropdownMutations({
+      value: visibleValue,
+      name,
+      nodeId,
+      nodeClass,
       handleNodeClass,
-      postTemplateValue,
-      setErrorData,
-    )?.then(() => {
-      setTimeout(() => {
-        setRefreshOptions(false);
-      }, 2000);
+      setOpen,
+      setWaitingForResponse,
+      setRefreshOptions,
     });
-  };
 
-  const formatTooltipContent = (option: string, index: number) => {
-    if (!optionsMetaData?.[index]) return option;
+  const handleInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      if (open && customValue) {
+        const newOptions = [...validOptions];
+        if (!newOptions.includes(customValue)) {
+          newOptions.push(customValue);
+        }
 
-    const metadata = optionsMetaData[index];
-    const metadataEntries = Object.entries(metadata)
-      .filter(([key, value]) => value !== null && key !== "icon")
-      .map(([key, value]) => {
-        const displayValue =
-          typeof value === "string" && value.length > 20
-            ? `${value.substring(0, 30)}...`
-            : String(value);
-        return `${key}: ${displayValue}`;
-      });
+        setFilteredOptions(newOptions);
 
-    return metadataEntries.length > 0
-      ? `${firstWord}: ${option}\n${metadataEntries.join("\n")}`
-      : option;
-  };
-
-  // Effects
-  useEffect(() => {
-    if (disabled && value !== "") {
-      onSelect("", undefined, true);
-    }
-  }, [disabled]);
-
-  useEffect(() => {
-    if (open) {
-      const filtered = cloneDeep(validOptions);
-      if (customValue === value && value && combobox) {
-        filtered.push(customValue);
+        handleOnNewValue?.({ value: customValue });
+        onSelect(customValue);
+        setOpen(false);
       }
-      setFilteredOptions(filtered);
     }
-  }, [open]);
-
-  // Render helper functions
+  };
 
   const renderLoadingButton = () => (
     <Button
@@ -156,258 +230,92 @@ export default function Dropdown({
       variant="primary"
       size="xs"
     >
-      <LoadingTextComponent text="Loading options" />
+      <LoadingTextComponent text={t("dropdown.loadingOptions")} />
     </Button>
-  );
-
-  const renderTriggerButton = () => (
-    <ShadTooltip content={!value ? (tooltip as string) : ""}>
-      <PopoverTrigger asChild>
-        <Button
-          disabled={
-            disabled ||
-            (Object.keys(validOptions).length === 0 &&
-              !combobox &&
-              !dialogInputs?.fields?.data?.node?.template)
-          }
-          variant="primary"
-          size="xs"
-          role="combobox"
-          ref={refButton}
-          aria-expanded={open}
-          data-testid={id}
-          className={cn(
-            editNode
-              ? "dropdown-component-outline input-edit-node"
-              : "dropdown-component-false-outline py-2",
-            "w-full justify-between font-normal",
-          )}
-        >
-          <span
-            className="flex items-center gap-2 truncate"
-            data-testid={`value-dropdown-${id}`}
-          >
-            {optionsMetaData?.[
-              filteredOptions.findIndex((option) => option === value)
-            ]?.icon && (
-              <ForwardedIconComponent
-                name={
-                  optionsMetaData?.[
-                    filteredOptions.findIndex((option) => option === value)
-                  ]?.icon
-                }
-                className="h-4 w-4"
-              />
-            )}
-            {value && filteredOptions.includes(value) ? value : placeholderName}{" "}
-          </span>
-          <ForwardedIconComponent
-            name="ChevronsUpDown"
-            className={cn(
-              "ml-2 h-4 w-4 shrink-0 text-foreground",
-              disabled
-                ? "hover:text-placeholder-foreground"
-                : "hover:text-foreground",
-            )}
-          />
-        </Button>
-      </PopoverTrigger>
-    </ShadTooltip>
-  );
-
-  const renderSearchInput = () => (
-    <div className="flex items-center border-b px-3">
-      <ForwardedIconComponent
-        name="search"
-        className="mr-2 h-4 w-4 shrink-0 opacity-50"
-      />
-      <input
-        onChange={searchRoleByTerm}
-        placeholder="Search options..."
-        className="flex h-9 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
-        autoComplete="off"
-      />
-    </div>
-  );
-
-  const renderCustomOptionDialog = () => (
-    <CommandGroup className="flex flex-col">
-      <CommandItem className="flex cursor-pointer items-center justify-start gap-2 truncate py-3 text-xs font-semibold text-muted-foreground">
-        <Button
-          className="w-full"
-          unstyled
-          onClick={() => {
-            setOpenDialog(true);
-          }}
-        >
-          <div className="flex items-center gap-2 pl-1">
-            <ForwardedIconComponent
-              name="Plus"
-              className="h-3 w-3 text-primary"
-            />
-            {`New ${firstWord}`}
-          </div>
-        </Button>
-      </CommandItem>
-      <CommandItem className="flex cursor-pointer items-center justify-start gap-2 truncate py-3 text-xs font-semibold text-muted-foreground">
-        <Button
-          className="w-full"
-          unstyled
-          onClick={() => {
-            handleRefreshButtonPress();
-          }}
-        >
-          <div className="flex items-center gap-2 pl-1">
-            <ForwardedIconComponent
-              name="RefreshCcw"
-              className={cn("refresh-icon h-3 w-3 text-primary")}
-            />
-            Refresh list
-          </div>
-        </Button>
-      </CommandItem>
-      <NodeDialog
-        open={openDialog}
-        dialogInputs={dialogInputs}
-        onClose={() => {
-          setOpenDialog(false);
-          setOpen(false);
-        }}
-        nodeId={nodeId!}
-        name={name!}
-        nodeClass={nodeClass!}
-      />
-    </CommandGroup>
-  );
-
-  const renderOptionsList = () => (
-    <CommandList>
-      <CommandGroup defaultChecked={false}>
-        {filteredOptions?.length > 0 ? (
-          filteredOptions?.map((option, index) => (
-            <ShadTooltip
-              key={index}
-              delayDuration={700}
-              styleClasses="whitespace-pre-wrap"
-              content={formatTooltipContent(option, index)}
-            >
-              <div>
-                <CommandItem
-                  value={option}
-                  onSelect={(currentValue) => {
-                    onSelect(currentValue);
-                    setOpen(false);
-                  }}
-                  className="items-center"
-                  data-testid={`${option}-${index}-option`}
-                >
-                  <div className="flex w-full items-center gap-2">
-                    {optionsMetaData && optionsMetaData.length > 0 && (
-                      <ForwardedIconComponent
-                        name={optionsMetaData?.[index]?.icon || "Unknown"}
-                        className="h-4 w-4 shrink-0 text-primary"
-                      />
-                    )}
-                    <div
-                      className={cn("flex truncate", {
-                        "flex-col":
-                          optionsMetaData && optionsMetaData?.length > 0,
-                        "w-full pl-2": !optionsMetaData?.[index]?.icon,
-                      })}
-                    >
-                      <div className="flex truncate">
-                        {option}{" "}
-                        <span
-                          className={`flex items-center pl-2 text-xs ${getStatusColor(
-                            optionsMetaData?.[index]?.status,
-                          )}`}
-                        >
-                          <LoadingTextComponent
-                            text={optionsMetaData?.[
-                              index
-                            ]?.status?.toLowerCase()}
-                          />
-                        </span>
-                      </div>
-                      {optionsMetaData && optionsMetaData?.length > 0 ? (
-                        <div className="flex w-full items-center text-muted-foreground">
-                          {Object.entries(
-                            filterMetadataKeys(optionsMetaData?.[index] || {}),
-                          )
-                            .filter(
-                              ([key, value]) =>
-                                value !== null && key !== "icon",
-                            )
-                            .map(([key, value], i, arr) => (
-                              <div
-                                key={key}
-                                className={cn("flex items-center", {
-                                  truncate: i === arr.length - 1,
-                                })}
-                              >
-                                {i > 0 && (
-                                  <ForwardedIconComponent
-                                    name="Circle"
-                                    className="mx-1 h-1 w-1 overflow-visible fill-muted-foreground"
-                                  />
-                                )}
-                                <div
-                                  className={cn("text-xs", {
-                                    truncate: i === arr.length - 1,
-                                  })}
-                                >{`${String(value)} ${key}`}</div>
-                              </div>
-                            ))}
-                        </div>
-                      ) : (
-                        <div className="ml-auto flex">
-                          <ForwardedIconComponent
-                            name="Check"
-                            className={cn(
-                              "h-4 w-4 shrink-0 text-primary",
-                              value === option ? "opacity-100" : "opacity-0",
-                            )}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </CommandItem>
-              </div>
-            </ShadTooltip>
-          ))
-        ) : (
-          <CommandItem disabled className="text-center text-sm">
-            No options found
-          </CommandItem>
-        )}
-      </CommandGroup>
-      <CommandSeparator />
-      {dialogInputs && dialogInputs?.fields && renderCustomOptionDialog()}
-    </CommandList>
   );
 
   const renderPopoverContent = () => (
     <PopoverContentDropdown
       side="bottom"
-      avoidCollisions={!!children}
+      avoidCollisions
+      collisionPadding={{
+        bottom: showingBuildPanel ? BUILD_PANEL_COLLISION_PADDING_PX : 0,
+      }}
       className="noflow nowheel nopan nodelete nodrag p-0"
       style={
         children ? {} : { minWidth: refButton?.current?.clientWidth ?? "200px" }
       }
     >
-      <Command>
-        {filteredOptions?.length > 0 && renderSearchInput()}
-        {renderOptionsList()}
+      <Command className="flex flex-col">
+        {policyOptions.length > 0 && (
+          <DropdownSearchInput
+            onSearch={searchRoleByTerm}
+            onKeyDown={handleInputKeyDown}
+          />
+        )}
+        <DropdownOptionsList
+          filteredOptions={visibleFilteredOptions}
+          filteredMetadata={visibleFilteredMetadata}
+          firstWord={firstWord}
+          value={visibleValue}
+          onSelect={onSelect}
+          setOpen={setOpen}
+          setWaitingForResponse={setWaitingForResponse}
+          sourceOptions={sourceOptions}
+          dialogInputs={dialogInputs}
+          handleSourceOptions={handleSourceOptions}
+          hasRefreshButton={hasRefreshButton}
+          handleRefreshButtonPress={handleRefreshButtonPress}
+          name={name}
+          openDialog={openDialog}
+          setOpenDialog={setOpenDialog}
+          setPendingSelect={setPendingSelect}
+          nodeId={nodeId}
+          nodeClass={nodeClass}
+        />
+        {!sourceOptions?.fields && hasRefreshButton && (
+          <div className="border-t bg-background">
+            <CommandItem className="flex cursor-pointer items-center justify-start gap-2 truncate rounded-b-md py-3 text-xs font-semibold text-muted-foreground">
+              <Button
+                className="w-full"
+                unstyled
+                data-testid={`refresh-dropdown-list-${name}`}
+                onClick={() => {
+                  handleRefreshButtonPress();
+                }}
+              >
+                <div className="flex items-center gap-2 pl-1">
+                  <ForwardedIconComponent
+                    name="RefreshCcw"
+                    className={cn("refresh-icon h-3 w-3 text-primary")}
+                  />
+                  Refresh list
+                </div>
+              </Button>
+            </CommandItem>
+          </div>
+        )}
       </Command>
     </PopoverContentDropdown>
   );
 
+  const isLegacyProviderPolicyPending =
+    isLegacyProviderSelector &&
+    allowedProviderNames === null &&
+    (isLoadingScopedModelProviders ||
+      isFetchingScopedModelProviders ||
+      scopedModelProvidersFetchStatus === "paused");
+  const effectiveIsLoading = isLoading || isLegacyProviderPolicyPending;
+
   // Loading state
-  if (Object.keys(validOptions).length === 0 && !combobox && isLoading) {
+  if (
+    Object.keys(validOptions).length === 0 &&
+    !combobox &&
+    effectiveIsLoading
+  ) {
     return (
       <div>
-        <span className="text-sm italic">Loading...</span>
+        <span className="text-sm italic">{t("dropdown.loadingOptions")}</span>
       </div>
     );
   }
@@ -417,10 +325,42 @@ export default function Dropdown({
     <Popover open={open} onOpenChange={children ? () => {} : setOpen}>
       {children ? (
         <PopoverAnchor>{children}</PopoverAnchor>
-      ) : refreshOptions || isLoading ? (
+      ) : refreshOptions || effectiveIsLoading ? (
         renderLoadingButton()
+      ) : validOptions.length === 1 &&
+        toggle &&
+        !combobox &&
+        visibleValue === validOptions[0] ? (
+        <div className="flex w-full items-center gap-2 truncate">
+          {policyOptionsMetaData?.[0]?.icon && (
+            <ForwardedIconComponent
+              name={policyOptionsMetaData?.[0]?.icon}
+              className="h-4 w-4 flex-shrink-0"
+            />
+          )}
+          <span className="truncate text-sm">{visibleValue}</span>
+        </div>
       ) : (
-        renderTriggerButton()
+        <div className="w-full truncate">
+          <DropdownTrigger
+            disabled={disabled}
+            validOptions={validOptions}
+            combobox={combobox}
+            sourceOptions={sourceOptions}
+            hasRefreshButton={hasRefreshButton}
+            editNode={editNode}
+            open={open}
+            refButton={refButton}
+            id={id}
+            value={visibleValue}
+            options={policyOptions}
+            placeholder={placeholder}
+            helperText={helperText}
+            filteredOptions={visibleFilteredOptions}
+            filteredMetadata={visibleFilteredMetadata}
+            ariaLabelledBy={ariaLabelledBy}
+          />
+        </div>
       )}
       {renderPopoverContent()}
     </Popover>

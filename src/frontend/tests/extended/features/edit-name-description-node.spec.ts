@@ -1,6 +1,10 @@
-import { expect, test } from "@playwright/test";
-import { awaitBootstrapTest } from "../../utils/await-bootstrap-test";
+import { expect, test } from "../../fixtures";
+import { openBlankFlow } from "../../utils/flow/open-blank-flow";
 
+// LE-1810: the inspection panel is a parameter manager and no longer offers
+// editable name/description fields — name and description are edited directly
+// ON the node (pencil button / inline inputs). The former "panel" and
+// "panel disabled" variants collapsed into this single on-node flow.
 test(
   "user should be able to edit name and description of a node",
   { tag: ["@release", "@workspace"] },
@@ -17,13 +21,7 @@ test(
 
     const randomName_4 = Math.random().toString(36).substring(2, 15);
     const randomDescription_4 = Math.random().toString(36).substring(2, 15);
-
-    await awaitBootstrapTest(page);
-
-    await page.waitForSelector('[data-testid="blank-flow"]', {
-      timeout: 30000,
-    });
-    await page.getByTestId("blank-flow").click();
+    await openBlankFlow(page);
 
     await page.waitForSelector(
       '[data-testid="sidebar-custom-component-button"]',
@@ -38,35 +36,35 @@ test(
 
     await page.getByTestId("div-generic-node").click();
 
-    await page.getByTestId("edit-name-description-button").click();
+    await page.getByTestId("node-edit-name-description-button").click();
 
     await page.getByTestId("input-title-Custom Component").fill(randomName);
 
     await page.getByTestId("textarea").fill(randomDescription);
 
-    await page.getByTestId("api_button_modal").click();
+    await page.getByTestId("publish-button").click();
 
-    await page.getByText("Close").last().click();
+    await page.keyboard.press("Escape");
 
     expect(await page.getByText(randomName).count()).toBe(1);
     expect(await page.getByText(randomDescription).count()).toBe(1);
 
     await page.getByTestId("div-generic-node").click();
 
-    await page.getByTestId("edit-name-description-button").click();
+    await page.getByTestId("node-edit-name-description-button").click();
 
     await page.getByTestId(`input-title-${randomName}`).fill(randomName_2);
 
     await page.getByTestId("textarea").fill(randomDescription_2);
 
-    await page.getByTestId("save-name-description-button").click();
+    await page.getByTestId("node-save-name-description-button").click();
 
     expect(await page.getByText(randomName_2).count()).toBe(1);
     expect(await page.getByText(randomDescription_2).count()).toBe(1);
 
     await page.getByTestId("div-generic-node").click();
 
-    await page.getByTestId("edit-name-description-button").click();
+    await page.getByTestId("node-edit-name-description-button").click();
 
     await page.getByTestId(`input-title-${randomName_2}`).fill(randomName_3);
 
@@ -76,7 +74,7 @@ test(
 
     await page.getByTestId("div-generic-node").click();
 
-    await page.getByTestId("edit-name-description-button").click();
+    await page.getByTestId("node-edit-name-description-button").click();
 
     await page.getByTestId(`input-title-${randomName_3}`).fill(randomName_4);
 
@@ -94,7 +92,7 @@ test(
 
     await page.getByTestId("div-generic-node").click();
 
-    await page.getByTestId("edit-name-description-button").click();
+    await page.getByTestId("node-edit-name-description-button").click();
 
     await page.getByTestId("textarea").fill(randomDescription_3);
 
